@@ -1,0 +1,1340 @@
+{
+  "nbformat": 4,
+  "nbformat_minor": 0,
+  "metadata": {
+    "colab": {
+      "name": "ATAI Project 2.0",
+      "provenance": [],
+      "collapsed_sections": [],
+      "authorship_tag": "ABX9TyPZceoZNs62BQeQYCbzm/CX",
+      "include_colab_link": true
+    },
+    "kernelspec": {
+      "name": "python3",
+      "display_name": "Python 3"
+    },
+    "language_info": {
+      "name": "python"
+    },
+    "accelerator": "GPU"
+  },
+  "cells": [
+    {
+      "cell_type": "markdown",
+      "metadata": {
+        "id": "view-in-github",
+        "colab_type": "text"
+      },
+      "source": [
+        "<a href=\"https://colab.research.google.com/github/sdhar16/semantic_web_chatbot/blob/main/ATAI%20Project%20demo\" target=\"_parent\"><img src=\"https://colab.research.google.com/assets/colab-badge.svg\" alt=\"Open In Colab\"/></a>"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "from IPython.display import clear_output"
+      ],
+      "metadata": {
+        "id": "LSsTkFIcD09m"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "!pip install -q rdflib transformers spacy-universal-sentence-encoder\n",
+        "!wget https://files.ifi.uzh.ch/ddis/teaching/2021/ATAI/dataset/ddis-movie-graph.nt.zip && unzip ddis-movie-graph.nt.zip \n",
+        "!wget https://files.ifi.uzh.ch/ddis/teaching/2021/ATAI/dataset/ddis-graph-embeddings.zip && unzip ddis-graph-embeddings.zip \n",
+        "!wget https://files.ifi.uzh.ch/ddis/teaching/2021/ATAI/dataset/movienet/images.json.zip && unzip images.json.zip \n",
+        "!wget https://files.ifi.uzh.ch/ddis/teaching/2021/ATAI/dataset/CrowdData_typoRCorrected.zip && unzip CrowdData_typoRCorrected.zip \n",
+        "clear_output()"
+      ],
+      "metadata": {
+        "id": "L9-3TsWbD0_7"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "markdown",
+      "source": [
+        "# Global variables"
+      ],
+      "metadata": {
+        "id": "PIQCIbtwbezb"
+      }
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "import rdflib\n",
+        "QSTN_INTENT = [\"person\", \"location\", \"time\", \"rating\", \"recommendations\", \"description\"]\n",
+        "PREDICATES = {\n",
+        " 'IMDb ID': rdflib.term.URIRef('http://www.wikidata.org/prop/direct/P345'),\n",
+        " 'actor': rdflib.term.URIRef('http://www.wikidata.org/prop/direct/P161'),\n",
+        " 'cast member': rdflib.term.URIRef('http://www.wikidata.org/prop/direct/P161'),\n",
+        " 'country': rdflib.term.URIRef('http://www.wikidata.org/prop/direct/P17'),\n",
+        " 'country of origin': rdflib.term.URIRef('http://www.wikidata.org/prop/direct/P495'),\n",
+        " 'director': rdflib.term.URIRef('http://www.wikidata.org/prop/direct/P57'),\n",
+        " 'filming location': rdflib.term.URIRef('http://www.wikidata.org/prop/direct/P915'), \n",
+        " 'genre': rdflib.term.URIRef('http://www.wikidata.org/prop/direct/P136'),\n",
+        " 'instance of': rdflib.term.URIRef('http://www.wikidata.org/prop/direct/P31'),\n",
+        " 'located in the administrative territorial entity': rdflib.term.URIRef('http://www.wikidata.org/prop/direct/P131'),\n",
+        " 'location': rdflib.term.URIRef('http://www.wikidata.org/prop/direct/P276'),\n",
+        " 'main subject': rdflib.term.URIRef('http://www.wikidata.org/prop/direct/P921'),\n",
+        " 'node description': rdflib.term.URIRef('http://schema.org/description'),\n",
+        " 'node label': rdflib.term.URIRef('http://www.w3.org/2000/01/rdf-schema#label'),\n",
+        " 'nominated for': rdflib.term.URIRef('http://www.wikidata.org/prop/direct/P1411'),\n",
+        " 'place of birth': rdflib.term.URIRef('http://www.wikidata.org/prop/direct/P19'),\n",
+        " 'place of death': rdflib.term.URIRef('http://www.wikidata.org/prop/direct/P20'),\n",
+        " 'place of publication': rdflib.term.URIRef('http://www.wikidata.org/prop/direct/P291'),\n",
+        " 'publication date': rdflib.term.URIRef('http://www.wikidata.org/prop/direct/P577'),\n",
+        " }\n",
+        "\n",
+        "CLASSIFIED_PREDICATES = {\"person\":[\"actor\", \"cast member\", \"director\"],\n",
+        "                          \"location\":[\"country\", 'country of origin', 'filming location', 'place of birth', 'place of death',  'place of publication'],\n",
+        "                          \"time\": ['publication date'],\n",
+        "                          \"description\":[],\n",
+        "                          \"recommendations\":[],\n",
+        "                          \"rating\":[]\n",
+        "                          }"
+      ],
+      "metadata": {
+        "id": "2k5vg5Iwbhbp"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "markdown",
+      "source": [
+        "# SPARQL Templates"
+      ],
+      "metadata": {
+        "id": "OEljRJ5X1p-N"
+      }
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "SPARQL_TEMPLATE_ENTITY = '''\n",
+        "PREFIX ddis: <http://ddis.ch/atai/> \n",
+        "PREFIX wd: <http://www.wikidata.org/entity/> \n",
+        "PREFIX wdt: <http://www.wikidata.org/prop/direct/> \n",
+        "PREFIX schema: <http://schema.org/> \n",
+        "\n",
+        "SELECT DISTINCT ?uri WHERE{{\n",
+        "    ?uri rdfs:label ?entity .\n",
+        "    FILTER (regex(?entity, \"{entity}\"@en, \"i\")) .\n",
+        "}}\n",
+        "LIMIT 9\n",
+        "'''\n",
+        "\n",
+        "SPARQL_TEMPLATE = '''\n",
+        "PREFIX ddis: <http://ddis.ch/atai/> \n",
+        "PREFIX wd: <http://www.wikidata.org/entity/> \n",
+        "PREFIX wdt: <http://www.wikidata.org/prop/direct/> \n",
+        "PREFIX schema: <http://schema.org/> \n",
+        "\n",
+        "SELECT ?ans ?ans_uri WHERE{{\n",
+        "    {entity_uri} <{predicate_uri}> ?ans_uri .\n",
+        "    OPTIONAL {{ ?ans_uri rdfs:label ?ans   }} .\n",
+        "    FILTER( !bound(?ans) || LANG(?ans) = \"en\" ) .\n",
+        "}}\n",
+        "LIMIT 9\n",
+        "'''\n",
+        "\n",
+        "SPARQL_TEMPLATE_RATINGS = \"\"\"\n",
+        "    PREFIX ddis: <http://ddis.ch/atai/> \n",
+        "    PREFIX wd: <http://www.wikidata.org/entity/> \n",
+        "    PREFIX wdt: <http://www.wikidata.org/prop/direct/> \n",
+        "    PREFIX schema: <http://schema.org/> \n",
+        "    \n",
+        "    SELECT ?rating  WHERE {{\n",
+        "        OPTIONAL {{ {entity_uri} ddis:rating ?rating }} \n",
+        "    }}\n",
+        "\"\"\"\n",
+        "\n",
+        "SPARQL_TEMPLATE_DESCRIPTION = \"\"\"\n",
+        "  PREFIX ddis: <http://ddis.ch/atai/> \n",
+        "  PREFIX wd: <http://www.wikidata.org/entity/> \n",
+        "  PREFIX wdt: <http://www.wikidata.org/prop/direct/> \n",
+        "  PREFIX schema: <http://schema.org/>\n",
+        "  \n",
+        "  SELECT ?description WHERE {{\n",
+        "    {entity_uri} schema:description ?description\n",
+        "  }}\n",
+        "\"\"\""
+      ],
+      "metadata": {
+        "id": "m9L0Lcj31ppf"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "markdown",
+      "source": [
+        "# Loading Pipelines"
+      ],
+      "metadata": {
+        "id": "X5ZZIbfLM9rC"
+      }
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "import spacy_universal_sentence_encoder\n",
+        "import spacy\n",
+        "from rdflib import Graph, graph\n",
+        "from rdflib.namespace import RDF, RDFS, XSD, Namespace\n",
+        "from transformers import pipeline\n",
+        "import rdflib \n",
+        "import numpy as np\n",
+        "import csv\n",
+        "import torch\n",
+        "\n",
+        "if(torch.cuda.is_available()):\n",
+        "  spacy.require_gpu()\n",
+        "\n",
+        "def load_zero_shot():\n",
+        "  zero_shot_pipeline = pipeline(\"zero-shot-classification\", model=\"facebook/bart-large-mnli\", device=0 if(torch.cuda.is_available()) else -1)\n",
+        "  return zero_shot_pipeline\n",
+        "\n",
+        "def load_ner_pipeline():\n",
+        "  ner_pipeline = pipeline('ner', model='dslim/bert-large-NER', device=0 if(torch.cuda.is_available()) else -1)\n",
+        "  return ner_pipeline\n",
+        "\n",
+        "def load_sentence_encoder():\n",
+        "  snt_encoder = spacy_universal_sentence_encoder.load_model('en_use_lg')\n",
+        "  return snt_encoder\n",
+        "\n",
+        "def load_graph(filename, format='turtle'):\n",
+        "  graph = Graph()\n",
+        "  graph.parse(filename, format=format)\n",
+        "  return graph\n",
+        "\n",
+        "def load_graph_embeddings():\n",
+        "  # load the embeddings\n",
+        "  entity_emb = np.load('./ddis-graph-embeddings/entity_embeds.npy')\n",
+        "  relation_emb = np.load('./ddis-graph-embeddings/relation_embeds.npy')\n",
+        "\n",
+        "  # load the dictionaries\n",
+        "  with open('./ddis-graph-embeddings/entity_ids.del', 'r') as ifile:\n",
+        "    ent2id = {rdflib.term.URIRef(ent): int(idx) for idx, ent in csv.reader(ifile, delimiter='\\t')}\n",
+        "    id2ent = {v: k for k, v in ent2id.items()}\n",
+        "  with open('./ddis-graph-embeddings/relation_ids.del', 'r') as ifile:\n",
+        "    rel2id = {rdflib.term.URIRef(rel): int(idx) for idx, rel in csv.reader(ifile, delimiter='\\t')}\n",
+        "    id2rel = {v: k for k, v in rel2id.items()}\n",
+        "\n",
+        "  ent2lbl = {ent: str(lbl) for ent, lbl in graph.subject_objects(RDFS.label)}\n",
+        "  lbl2ent = {lbl: ent for ent, lbl in ent2lbl.items()}\n",
+        "\n",
+        "  return entity_emb, relation_emb, ent2id, rel2id, id2ent, ent2lbl, lbl2ent"
+      ],
+      "metadata": {
+        "id": "shVMYRufM1N2"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "sentence_encoder = load_sentence_encoder()\n",
+        "ner = load_ner_pipeline()\n",
+        "zero_shot = load_zero_shot()\n",
+        "graph = load_graph('14_graph.nt')\n",
+        "entity_emb, relation_emb, ent2id, rel2id, id2ent, ent2lbl, lbl2ent = load_graph_embeddings()\n",
+        "\n",
+        "WD = Namespace('http://www.wikidata.org/entity/')\n",
+        "WDT = Namespace('http://www.wikidata.org/prop/direct/')\n",
+        "RDFS = rdflib.namespace.RDFS\n",
+        "SCHEMA = Namespace('http://schema.org/')\n",
+        "DDIS = Namespace('http://ddis.ch/atai/')"
+      ],
+      "metadata": {
+        "id": "CcpdCnPlNDzy"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "markdown",
+      "source": [
+        "# Predicate embeddings"
+      ],
+      "metadata": {
+        "id": "4r14rB0Ii0Md"
+      }
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "PREDICATE_EMBDS = {intent:{lbls:sentence_encoder(lbls) for lbls in CLASSIFIED_PREDICATES[intent]} for intent in QSTN_INTENT}"
+      ],
+      "metadata": {
+        "id": "YOASHKQ9i0hm"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "markdown",
+      "source": [
+        "# Get all entities"
+      ],
+      "metadata": {
+        "id": "dSp6s0s3PI-Z"
+      }
+    },
+    {
+      "cell_type": "markdown",
+      "source": [
+        "## Human entities"
+      ],
+      "metadata": {
+        "id": "wt-eVpc7PQVi"
+      }
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "humans_query = graph.query(\"\"\"\n",
+        "PREFIX ddis: <http://ddis.ch/atai/>\n",
+        "PREFIX wd: <http://www.wikidata.org/entity/>\n",
+        "PREFIX wdt: <http://www.wikidata.org/prop/direct/>\n",
+        "PREFIX schema: <http://schema.org/>\n",
+        "\n",
+        "SELECT DISTINCT ?b ?label WHERE{\n",
+        "  ?b wdt:P31/wdt:P279* wd:Q5.\n",
+        "  ?b rdfs:label ?label\n",
+        "}\n",
+        "\"\"\")\n",
+        "HUMANS_DICT = {}\n",
+        "for k, v in humans_query:\n",
+        "  v = v.toPython().lower()\n",
+        "  while(v in HUMANS_DICT):\n",
+        "    v+=\"0\"\n",
+        "  HUMANS_DICT[v] = k\n",
+        "HUMANS_LBL = list(HUMANS_DICT.keys())"
+      ],
+      "metadata": {
+        "id": "YIjIVxY-PIbk"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        ""
+      ],
+      "metadata": {
+        "id": "YxcKMBbaao-G"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "markdown",
+      "source": [
+        "### Film entities"
+      ],
+      "metadata": {
+        "id": "Gr7iUGdsPglS"
+      }
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "film_query = graph.query(\"\"\"\n",
+        "PREFIX ddis: <http://ddis.ch/atai/>\n",
+        "PREFIX wd: <http://www.wikidata.org/entity/>\n",
+        "PREFIX wdt: <http://www.wikidata.org/prop/direct/>\n",
+        "PREFIX schema: <http://schema.org/>\n",
+        "\n",
+        "SELECT DISTINCT ?b ?label WHERE{\n",
+        "  ?b wdt:P31/wdt:P279* wd:Q11424.\n",
+        "  ?b rdfs:label ?label\n",
+        "}\n",
+        "\"\"\")\n",
+        "\n",
+        "FILM_DICT = {}\n",
+        "for k, v in film_query:\n",
+        "  v = v.toPython().lower()\n",
+        "  while(v in FILM_DICT):\n",
+        "    v+=\"0\"\n",
+        "  FILM_DICT[v] = k\n",
+        "FILM_LBL = list(FILM_DICT.keys())"
+      ],
+      "metadata": {
+        "id": "ivPIDM0bPk2P"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "markdown",
+      "source": [
+        "# Load image JSON"
+      ],
+      "metadata": {
+        "id": "bUpc8bhioeAE"
+      }
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "import json\n",
+        "IMAGES = json.load(open('images.json'))"
+      ],
+      "metadata": {
+        "id": "Gx4bzpsIodTo"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "markdown",
+      "source": [
+        "# Entity Class"
+      ],
+      "metadata": {
+        "id": "RK_3vcGtgYPB"
+      }
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "class Entity:\n",
+        "  def __init__(self, label, uri, cls):\n",
+        "    self.label = label\n",
+        "    self.uri = uri\n",
+        "    self.cls = cls\n",
+        "  def __str__(self):\n",
+        "    if(self.uri!=None):\n",
+        "      return \"Entity Label: \"+ self.label+ \", \"+ \"Class: \"+ self.cls+ \", URI:\"+ self.uri.toPython()\n",
+        "    return \"None\""
+      ],
+      "metadata": {
+        "id": "b_7ZBeRQgXCv"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "markdown",
+      "source": [
+        "# Predicate Class"
+      ],
+      "metadata": {
+        "id": "aZ1H2lWUoVrI"
+      }
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "class Predicate:\n",
+        "  def __init__(self, label, uri):\n",
+        "    self.label = label\n",
+        "    self.uri = uri\n",
+        "  def __str__(self):\n",
+        "    if(self.uri!=None):\n",
+        "      return \"Predicate Label: \"+ self.label+ \", \" +  \", URI:\"+ self.uri.toPython()\n",
+        "    return \"None\""
+      ],
+      "metadata": {
+        "id": "7IvCY44foXae"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "markdown",
+      "source": [
+        "# Question Class"
+      ],
+      "metadata": {
+        "id": "BaJzSVW3dG9f"
+      }
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "import nltk\n",
+        "from nltk.corpus import stopwords as stopwords_nltk\n",
+        "from nltk.tokenize import RegexpTokenizer, word_tokenize\n",
+        "\n",
+        "import numpy as np\n",
+        "import difflib\n",
+        "\n",
+        "nltk.download('stopwords')\n",
+        "nltk.download('punkt')\n",
+        "\n",
+        "tokenizer = RegexpTokenizer(r'\\w+')\n",
+        "\n",
+        "greetings = ['hello', 'hi', 'hey', 'me', 'please', \"hello\", \"how are you?\", \"hi there\", \"hi\", \"what's up\", \"hi, how are you\", \"whats up\"]\n",
+        "\n",
+        "stopwords = stopwords_nltk.words('english')\n",
+        "newStopWords = ['who','where', 'which', 'how', 'can', 'when', 'what', 'whose', 'show']\n",
+        "stopwords.extend(newStopWords)\n",
+        "\n",
+        "class Question:\n",
+        "  def __init__(self, text):\n",
+        "    self.text = text\n",
+        "\n",
+        "    self.processed_question = text\n",
+        "    self.intent = None\n",
+        "    self.entity1 = None\n",
+        "    self.entity2 = None\n",
+        "    self.predicates = None\n",
+        "    self.greet = False\n",
+        "\n",
+        "    self.check_greetings()\n",
+        "\n",
+        "    if(self.greet):\n",
+        "      return\n",
+        "\n",
+        "    self.preprocess()\n",
+        "\n",
+        "\n",
+        "  def get_predicates(self, embedding):\n",
+        "    max_score = -1e6\n",
+        "    predicate_lbl = None\n",
+        "\n",
+        "    for lbl in PREDICATE_EMBDS[self.intent].keys():\n",
+        "      score = PREDICATE_EMBDS[self.intent][lbl].similarity(embedding) - 0.1*nltk.edit_distance(lbl, self.processed_question) / (len(self.processed_question) + len(lbl))\n",
+        "      \n",
+        "      if(score>max_score):\n",
+        "        predicate_lbl = lbl\n",
+        "        max_score = score\n",
+        "\n",
+        "    predicate_uri = PREDICATES[predicate_lbl]\n",
+        "\n",
+        "    return Predicate(predicate_lbl, predicate_uri)\n",
+        "\n",
+        "  def preprocess(self):\n",
+        "    self.processed_question = self.processed_question.replace(\"IMDB\", 'imdb')\n",
+        "    self.processed_question = self.processed_question.replace(\"IMDb\", 'imdb')\n",
+        "    self.processed_question = self.processed_question.replace(\"Wikidata\", 'wikidata')\n",
+        "    self.processed_question = self.processed_question.replace(\"WikiData\", 'wikidata')\n",
+        "\n",
+        "    self.processed_question = self.remove_punctuations(self.processed_question)\n",
+        "    self.processed_question = self.remove_greetings(self.processed_question)\n",
+        "    self.entity1, self.entity2 = self.get_entity(self.remove_stopwords(self.processed_question, newStopWords))\n",
+        "\n",
+        "    if(self.entity1!=None):\n",
+        "      self.processed_question = self.remove_entities(self.processed_question, self.entity1.label)\n",
+        "    \n",
+        "    \n",
+        "    if(self.entity2!=None):\n",
+        "      self.processed_question = self.remove_entities(self.processed_question, self.entity2.label)\n",
+        "\n",
+        "    # print(self.entity1, self.entity2)\n",
+        "\n",
+        "    self.check_greetings()\n",
+        "    if(self.greet):\n",
+        "      return \n",
+        "    \n",
+        "    self.intent = self.get_intents(self.processed_question, QSTN_INTENT)\n",
+        "    flag = True\n",
+        "\n",
+        "    IMGS_WORD = ['poster', 'picture', 'image', 'potrait', 'photo', 'photograph']\n",
+        "    FRAME_WORDS = [\"frame\"]\n",
+        "    WEBPAGES_WORDS = [\"webpage\", \"link\", \"website\", \"page\"]\n",
+        "    OCCUPATION_WORDS = [\"occupation\", \"does for a living\", \"do for a living\"]\n",
+        "\n",
+        "    for w in IMGS_WORD:\n",
+        "      if(w in self.processed_question.lower() and flag):\n",
+        "        self.intent = 'images'\n",
+        "        flag = False\n",
+        "        break\n",
+        "    for w in FRAME_WORDS:\n",
+        "      if(w in self.processed_question.lower() and flag):\n",
+        "        self.intent = 'frame'\n",
+        "        flag = False\n",
+        "        break\n",
+        "    for w in WEBPAGES_WORDS:\n",
+        "      if(w in self.processed_question.lower() and (\"wikidata\" in self.processed_question.lower()) and flag):\n",
+        "        self.intent = 'wikidata'\n",
+        "        flag= False\n",
+        "        break\n",
+        "      elif(w in self.processed_question.lower() and flag):\n",
+        "        self.intent = \"imdb\"\n",
+        "        flag = False\n",
+        "        break\n",
+        "    for w in OCCUPATION_WORDS:\n",
+        "      if(w in self.processed_question.lower() and flag):\n",
+        "        self.intent = 'description'\n",
+        "        flag = False\n",
+        "        break\n",
+        "    \n",
+        "    for w in OCCUPATION_WORDS:\n",
+        "      if(w in self.processed_question.lower() and flag):\n",
+        "        self.intent = 'description'\n",
+        "        flag = False\n",
+        "        break\n",
+        "\n",
+        "    self.processed_question = self.remove_stopwords(self.processed_question, stopwords)\n",
+        "\n",
+        "\n",
+        "    embedding = sentence_encoder(self.processed_question)\n",
+        "\n",
+        "    if(self.intent in [\"person\", \"location\", \"time\"]):\n",
+        "      self.predicates = self.get_predicates(embedding)\n",
+        "\n",
+        "\n",
+        "  def remove_punctuations(self, question):    \n",
+        "      processed_question = ' '.join(tokenizer.tokenize(question))\n",
+        "      return processed_question\n",
+        "\n",
+        "  def remove_greetings(self, question):    \n",
+        "      text_tokens = word_tokenize(question)\n",
+        "      tokens_without_grt = [word for word in text_tokens if not word.lower() in greetings]\n",
+        "\n",
+        "      processed_question = ' '.join(tokens_without_grt)\n",
+        "      return processed_question\n",
+        "\n",
+        "  def remove_entities(self, question, entity):\n",
+        "      processed_question = question.replace(entity, \"\").lower()\n",
+        "      return processed_question\n",
+        "\n",
+        "  def get_entity(self, question_text):\n",
+        "    entities = ner(question_text, aggregation_strategy=\"simple\")\n",
+        "\n",
+        "    entity_list = []\n",
+        "    cls_list = []\n",
+        "\n",
+        "    # Select longest entity\n",
+        "    for i in entities:\n",
+        "      entity_list.append(i['word'])\n",
+        "      cls_list.append(i['entity_group'])\n",
+        "\n",
+        "    entities = zip(entity_list, cls_list)\n",
+        "    \n",
+        "    sorted_list = list(sorted(entities, key = lambda x: len(x[0])))\n",
+        "\n",
+        "    if(len(sorted_list)==0):\n",
+        "      return None, None\n",
+        "\n",
+        "    if(len(sorted_list)==1):\n",
+        "      entity_lbl1 = sorted_list[-1][0]\n",
+        "      entity_clss1 = sorted_list[-1][1]\n",
+        "      entity_uri1 = self.get_entity_uri(entity_lbl1.lower(), entity_clss1)\n",
+        "      if(entity_uri1==None):\n",
+        "        return None, None\n",
+        "      return Entity(entity_lbl1, entity_uri1, entity_clss1), None\n",
+        "\n",
+        "    entity_lbl1 = sorted_list[-1][0]\n",
+        "    entity_clss1 = sorted_list[-1][1]\n",
+        "    entity_uri1 = self.get_entity_uri(entity_lbl1.lower(), entity_clss1)\n",
+        "\n",
+        "    entity_lbl2 = sorted_list[-2][0]\n",
+        "    entity_clss2 = sorted_list[-2][1]\n",
+        "    entity_uri2 = self.get_entity_uri(entity_lbl2.lower(), entity_clss2)\n",
+        "\n",
+        "    if(entity_uri1!=None and entity_uri2!=None):\n",
+        "      return Entity(entity_lbl1, entity_uri1, entity_clss1), Entity(entity_lbl2, entity_uri2, entity_clss2)\n",
+        "    if(entity_uri1==None and entity_uri2!=None):\n",
+        "      return Entity(entity_lbl2, entity_uri2, entity_clss2), None\n",
+        "    if(entity_uri1!=None and entity_uri2==None):\n",
+        "      return Entity(entity_lbl1, entity_uri1, entity_clss1), None\n",
+        "    return None, None\n",
+        "  \n",
+        "  def get_entity_uri(self, entity_lbl, entity_clss):\n",
+        "    if(entity_clss==\"PER\"):\n",
+        "      LBL = HUMANS_LBL\n",
+        "      DICT = HUMANS_DICT\n",
+        "    else:\n",
+        "      LBL = FILM_LBL\n",
+        "      DICT = FILM_DICT\n",
+        "    # print(entity_lbl, len(LBL))\n",
+        "    match = difflib.get_close_matches(entity_lbl, LBL, n=1)\n",
+        "    # print(match)\n",
+        "\n",
+        "    if(len(match)==0):\n",
+        "      return None\n",
+        "    return DICT[match[0]]\n",
+        "  \n",
+        "  def get_intents(self, question, intents):\n",
+        "    intents = zero_shot(question, intents) # Get the intents\n",
+        "    top_intent = intents['labels'][0]\n",
+        "    return top_intent\n",
+        "\n",
+        "  def remove_stopwords(self, question, sws):\n",
+        "    text_tokens = word_tokenize(question)\n",
+        "    tokens_without_sw = [word for word in text_tokens if not word.lower() in sws]\n",
+        "    processed_question = ' '.join(tokens_without_sw)\n",
+        "    return processed_question\n",
+        "  \n",
+        "  def check_greetings(self):\n",
+        "    if(self.text.lower() in greetings or len(self.text)<7):\n",
+        "      self.greet = True\n",
+        "      return \n",
+        "    if(len(self.processed_question)==0):\n",
+        "      self.greet = True\n",
+        "      return \n",
+        "  \n",
+        "  def __str__(self):\n",
+        "    out = \"\"\n",
+        "    if(self.processed_question!=None):\n",
+        "      out = \"Processed Question: \" + self.processed_question + \"\\n\"\n",
+        "\n",
+        "    if(self.entity1!=None):\n",
+        "      out+=self.entity1.__str__()\n",
+        "      out+=\"\\n\"\n",
+        "\n",
+        "    \n",
+        "    if(self.entity2!=None):\n",
+        "      out+=self.entity2.__str__()\n",
+        "      out+=\"\\n\"\n",
+        "    if(self.predicates!=None):\n",
+        "      out+=self.predicates.__str__()\n",
+        "      out+=\"\\n\"\n",
+        "    if(self.intent!=None):\n",
+        "      out+=\"Intent: \"+ self.intent\n",
+        "    return out if(out!=\"\") else \"None\"\n"
+      ],
+      "metadata": {
+        "id": "fTEsViLyZ8hT"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "markdown",
+      "source": [
+        "### Get entity list with the closest match"
+      ],
+      "metadata": {
+        "id": "wBNXyNF5Tstq"
+      }
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "def get_entity_uri_list(entity_lbl, entity_clss):\n",
+        "  if(entity_clss==\"PER\"):\n",
+        "    LBL = HUMANS_LBL\n",
+        "    DICT = HUMANS_DICT\n",
+        "  else:\n",
+        "    LBL = FILM_LBL\n",
+        "    DICT = FILM_DICT\n",
+        "\n",
+        "  match = []\n",
+        "  for lbl in LBL:\n",
+        "    if(entity_lbl.lower() in lbl.lower()):\n",
+        "      match.append(lbl)\n",
+        "    if(len(match)>=25):\n",
+        "      break\n",
+        "  if(len(match)==0):\n",
+        "    return []\n",
+        "  return [DICT[m] for m in match]"
+      ],
+      "metadata": {
+        "id": "8ZK030PdVVzI"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "markdown",
+      "source": [
+        "# Chatbot Class"
+      ],
+      "metadata": {
+        "id": "U9Dw0WH1ytkh"
+      }
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "from tqdm import tqdm\n",
+        "import csv\n",
+        "import itertools\n",
+        "from sklearn.metrics import pairwise_distances\n",
+        "import pandas as pd\n",
+        "from datetime import datetime\n",
+        "from PIL import Image\n",
+        "import requests\n",
+        "from io import BytesIO\n",
+        "import random\n",
+        "\n",
+        "return_greetings = [\"Hi :)\", \"Hola\", \"How can I help you :)\", \"Whassss upppp!!!!\", \"Howdy Partner!\", \"Hello\", \"How are you doing?\", \"Greetings!\", \"How do you do?\"]\n",
+        "\n",
+        "class ChatBot:\n",
+        "  def __init__(self):\n",
+        "    self.prev_entity = None\n",
+        "\n",
+        "  def process_question(self, question_text):\n",
+        "      question = Question(question_text)\n",
+        "      print(question)\n",
+        "\n",
+        "      return question\n",
+        "\n",
+        "  def get_answer(self, question_text):\n",
+        "    question = self.process_question(question_text)\n",
+        "\n",
+        "    if(question.greet):\n",
+        "      return random.choice(return_greetings)\n",
+        "    elif question.intent==\"images\":\n",
+        "      ans = self.get_images(question)\n",
+        "    elif question.intent==\"frame\":\n",
+        "      ans = self.get_frame(question)\n",
+        "    elif question.intent==\"wikidata\":\n",
+        "      ans = self.get_wikidata(question)\n",
+        "    elif question.intent==\"imdb\":\n",
+        "      ans = self.get_imdb(question)\n",
+        "    elif(question.entity1==None and self.prev_entity==None):\n",
+        "      return \"Sorry I did'nt get any entity, can you please rephrase the question?\"\n",
+        "    elif(question.entity1!=None and question.entity2!=None):\n",
+        "      ans = \"Yes\" if self.assertion_statements(question.entity1, question.entity2) else \"No\"\n",
+        "    elif(question.intent==\"recommendations\"):\n",
+        "      ans = self.get_recommendation(question)\n",
+        "    elif(question.intent==\"rating\"):\n",
+        "      ans = self.get_rating(question)\n",
+        "    elif(question.intent==\"description\"):\n",
+        "      ans = self.get_description(question)\n",
+        "    elif question.intent in [\"person\", \"location\"]:\n",
+        "      ans = self.get_answer_from_graph(question)\n",
+        "\n",
+        "    elif question.intent==\"time\":\n",
+        "      ans = self.get_dates(question)\n",
+        "    else:\n",
+        "      ans = \"Can you please rephrase the question?\"\n",
+        "    \n",
+        "    if(question.entity1!=None):\n",
+        "      self.prev_entity = question.entity1\n",
+        "    if(ans==None or ans==\"None\"):\n",
+        "      ans = \"Sorry I did'nt get that, can you please rephrase the question or ask another one? I afraid my creator did not design me to deal with this :(\"\n",
+        "\n",
+        "    return str(ans)\n",
+        "\n",
+        "  def get_recommendation(self, question):\n",
+        "    entity = None\n",
+        "    if(question.entity1==None and self.prev_entity!=None):\n",
+        "      entity = self.prev_entity\n",
+        "    elif(question.entity1!=None):\n",
+        "      entity = question.entity1\n",
+        "    elif(question.entity1==None):\n",
+        "      return None\n",
+        "  \n",
+        "    if(entity.cls==\"PER\"):\n",
+        "      return self.get_per_recommendation(entity)\n",
+        "    elif(entity.cls==\"LOC\"):\n",
+        "      return self.get_loc_recommendation(entity)\n",
+        "    else:\n",
+        "      return self.get_movie_recommendation(entity)\n",
+        "\n",
+        "  def get_loc_recommendation(self, entity):\n",
+        "    for s,p,o in graph.triples((None, RDFS.label, rdflib.term.Literal(entity.label, lang='en'))):\n",
+        "      if(  ((s, WDT.P31, WD.Q6256) in graph) or ((s, WDT.P31, WD.Q515) in graph) ):\n",
+        "        entity.uri = s\n",
+        "        print(\"Updated entity\", s)\n",
+        "        break\n",
+        "    head = entity_emb[ent2id[entity.uri]]\n",
+        "\n",
+        "    pred = relation_emb[rel2id[WDT.P915]]\n",
+        "    lhs = head - pred\n",
+        "\n",
+        "    dist = pairwise_distances(lhs.reshape(1, -1), entity_emb).reshape(-1)\n",
+        "\n",
+        "    most_likely = dist.argsort()\n",
+        "\n",
+        "    ans = pd.DataFrame([\n",
+        "        (id2ent[idx][len(WD):], ent2lbl[id2ent[idx]], dist[idx], rank+1)\n",
+        "        for rank, idx in enumerate(most_likely[:4])],\n",
+        "        columns=('Entity', 'Label', 'Score', 'Rank'))\n",
+        "\n",
+        "    return \"Some of the movies are \"+\", \".join(list(ans['Label']))\n",
+        "\n",
+        "    \n",
+        "  def get_movie_recommendation(self, entity):\n",
+        "    ent = ent2id[entity.uri]\n",
+        "\n",
+        "    # we compare the embedding of the query entity to all other entity embeddings\n",
+        "    dist = pairwise_distances(entity_emb[ent].reshape(1, -1), entity_emb).reshape(-1)\n",
+        "    # order by plausibility\n",
+        "    most_likely = dist.argsort()\n",
+        "\n",
+        "    data = pd.DataFrame([\n",
+        "      (\n",
+        "        id2ent[idx][len(WD):], # qid\n",
+        "        ent2lbl[id2ent[idx]],  # label\n",
+        "        dist[idx],             # score\n",
+        "        rank+1,                # rank\n",
+        "      )\n",
+        "      for rank, idx in enumerate(most_likely[:5])],\n",
+        "      columns=('Entity', 'Label', 'Score', 'Rank'))\n",
+        "    \n",
+        "    ans = \"My recommendations are \" + \", \".join(list(data['Label'])[1:])\n",
+        "    # print(ans)\n",
+        "    return ans\n",
+        "\n",
+        "\n",
+        "  def get_per_recommendation(self, entity):\n",
+        "    description = [o for s,p,o in graph.triples((entity.uri, SCHEMA.description, None))][0].toPython()\n",
+        "    predicate = WDT.P57 # director\n",
+        "    if(\"actor\" in description or \"actress\" in description):\n",
+        "      predicate = WDT.P161 # actors and actoresses\n",
+        "    \n",
+        "    head = entity_emb[ent2id[entity.uri]]\n",
+        "\n",
+        "    pred = relation_emb[rel2id[predicate]]\n",
+        "\n",
+        "    lhs = head - pred\n",
+        "\n",
+        "    dist = pairwise_distances(lhs.reshape(1, -1), entity_emb).reshape(-1)\n",
+        "\n",
+        "    most_likely = dist.argsort()\n",
+        "\n",
+        "    ans = pd.DataFrame([\n",
+        "        (id2ent[idx][len(WD):], ent2lbl[id2ent[idx]], dist[idx], rank+1)\n",
+        "        for rank, idx in enumerate(most_likely[:4])],\n",
+        "        columns=('Entity', 'Label', 'Score', 'Rank'))\n",
+        "    \n",
+        "    return \"Some of the movies are \"+\", \".join(list(ans['Label']))\n",
+        "\n",
+        "  def get_rating(self, question):\n",
+        "    if(question.entity1!=None):\n",
+        "        entity = question.entity1\n",
+        "    else:\n",
+        "      return None\n",
+        "    ans = [s for s, in graph.query(SPARQL_TEMPLATE_RATINGS.format(entity_uri = entity.uri.n3()))]\n",
+        "    if(len(ans)>0):\n",
+        "      return str(ans[0].toPython())\n",
+        "  \n",
+        "  def get_description(self, question):\n",
+        "    if(question.entity1!=None):\n",
+        "        entity = question.entity1\n",
+        "    else:\n",
+        "      return None\n",
+        "    \n",
+        "    ans = [o for s,p,o in graph.triples((entity.uri, SCHEMA.description, None))]\n",
+        "    if(len(ans)>0):    \n",
+        "      return str(ans[0].toPython())\n",
+        "    return None\n",
+        "\n",
+        "  \n",
+        "  \n",
+        "  def get_dates(self, question):\n",
+        "    if(question.entity1==None and self.prev_entity!=None):\n",
+        "      entity = self.prev_entity\n",
+        "    elif(question.entity1!=None):\n",
+        "      entity = question.entity1\n",
+        "    else:\n",
+        "      return None\n",
+        "\n",
+        "    ans = [s for s in graph.query(SPARQL_TEMPLATE.format(predicate_uri = question.predicates.uri, entity_uri = entity.uri.n3()))][0][1]\n",
+        "\n",
+        "    return ans\n",
+        "  \n",
+        "  def get_images(self, question):\n",
+        "    if(question.entity1==None and self.prev_entity!=None):\n",
+        "      entity = self.prev_entity\n",
+        "    elif(question.entity1!=None):\n",
+        "      entity = question.entity1\n",
+        "    else:\n",
+        "      return None\n",
+        "\n",
+        "    output = [o for s,p,o in graph.triples((entity.uri, WDT.P345, None))]\n",
+        "    if(len(output)==0):\n",
+        "      return \"Sorry I cannot find the image\"\n",
+        "\n",
+        "    output = output[0].toPython()\n",
+        "\n",
+        "    img_type = None\n",
+        "    entity_type = None\n",
+        "    if(entity.cls==\"PER\"):\n",
+        "      img_type = \"event\"\n",
+        "      entity_type =\"cast\"\n",
+        "    else:\n",
+        "      img_type = \"poster\"\n",
+        "      entity_type =\"movie\"\n",
+        "\n",
+        "    for image in IMAGES:\n",
+        "      if(output in image[entity_type] and image['type']==img_type):\n",
+        "        return \"Here is the image image:\"+image['img'][: image['img'].find('.')]\n",
+        "    return \"Sorry I cannot find the image\"\n",
+        "  def get_imdb(self, question):\n",
+        "    if(question.entity1==None and self.prev_entity!=None):\n",
+        "      entity = self.prev_entity\n",
+        "    elif(question.entity1!=None):\n",
+        "      entity = question.entity1\n",
+        "    else:\n",
+        "      return None\n",
+        "\n",
+        "    output = [o for s,p,o in graph.triples((entity.uri, WDT.P345, None))]\n",
+        "    if(len(output)==0):\n",
+        "      return \"Sorry I cannot find the webpage\"\n",
+        "\n",
+        "    output = output[0].toPython()\n",
+        "    return \"Here is the IMDb page imdb:\"+output\n",
+        "\n",
+        "  def get_wikidata(self, question):\n",
+        "    if(question.entity1==None and self.prev_entity!=None):\n",
+        "      entity = self.prev_entity\n",
+        "    elif(question.entity1!=None):\n",
+        "      entity = question.entity1\n",
+        "    else:\n",
+        "      return None\n",
+        "\n",
+        "    output = entity.uri.n3()[entity.uri.n3().find('Q'):-1]\n",
+        "    return \"Here is the wikidata page wd:\"+output\n",
+        "  \n",
+        "  def get_frame(self, question):\n",
+        "    if(question.entity1==None and self.prev_entity!=None):\n",
+        "      entity = self.prev_entity\n",
+        "    elif(question.entity1!=None):\n",
+        "      entity = question.entity1\n",
+        "    else:\n",
+        "      return None\n",
+        "\n",
+        "    if(entity.cls=='PER'):\n",
+        "      return self.get_images(question)\n",
+        "\n",
+        "    output = [o for s,p,o in graph.triples((entity.uri, WDT.P345, None))]\n",
+        "    if(len(output)==0):\n",
+        "      return \"Sorry I cannot find the image\"\n",
+        "\n",
+        "    output = output[0].toPython()\n",
+        "\n",
+        "    img_type = \"still_frame\"\n",
+        "    entity_type = \"movie\"\n",
+        "    for image in IMAGES:\n",
+        "      if(output in image[entity_type] and image['type']==img_type):\n",
+        "        return \"Here is the still frame image:\"+image['img'][: image['img'].find('.')]\n",
+        "    return \"Sorry I cannot find the image\"\n",
+        "\n",
+        "    \n",
+        "\n",
+        "  def get_answer_from_embeddings(self, entity, predicate):\n",
+        "    head = entity_emb[ent2id[entity.uri]]\n",
+        "\n",
+        "    pred = relation_emb[rel2id[predicate]]\n",
+        "    # combine according to the TransE scoring function\n",
+        "    lhs = head + pred\n",
+        "    # compute distance to *any* entity\n",
+        "    dist = pairwise_distances(lhs.reshape(1, -1), entity_emb).reshape(-1)\n",
+        "    # find most plausible tails\n",
+        "    most_likely = dist.argsort()\n",
+        "    # show most likely entities\n",
+        "    ans = pd.DataFrame([\n",
+        "        (id2ent[idx][len(WD):], ent2lbl[id2ent[idx]], dist[idx], rank+1)\n",
+        "        for rank, idx in enumerate(most_likely[:10])],\n",
+        "        columns=('Entity', 'Label', 'Score', 'Rank'))\n",
+        "\n",
+        "    return list(ans['Label'])\n",
+        "\n",
+        "  def get_answer_from_graph(self, question):\n",
+        "    if(question.entity1==None and self.prev_entity!=None):\n",
+        "      entity = self.prev_entity\n",
+        "    elif(question.entity1!=None):\n",
+        "      entity = question.entity1\n",
+        "    else:\n",
+        "      return None\n",
+        "\n",
+        "    num_answers = 1\n",
+        "\n",
+        "    if(entity.cls==\"LOC\" and question.predicates.label==\"filming location\"):\n",
+        "      return self.get_loc_recommendation(entity)\n",
+        "    if(question.predicates.label in [\"actor\", \"cast member\"]):\n",
+        "      num_answers = 3\n",
+        "    \n",
+        "    graph_ret = [o for s,p,o in graph.triples((entity.uri, question.predicates.uri, None))]\n",
+        "    if(len(graph_ret)==0):\n",
+        "      ans = self.get_answer_from_embeddings(entity, question.predicates.uri)[:num_answers]\n",
+        "    else:\n",
+        "      ans = []\n",
+        "      for ret in graph_ret:\n",
+        "        ans.extend([o.toPython() for s,p,o in graph.triples((ret, RDFS.label, None))])\n",
+        "    \n",
+        "\n",
+        "    return \"My answer is \" +\", \".join(ans[:num_answers])\n",
+        "  \n",
+        "\n",
+        "  def assertion_statements(self, entity1, entity2):\n",
+        "    if(entity1.cls!=\"PER\"):\n",
+        "      entity1, entity2 = entity2, entity1\n",
+        "\n",
+        "    predicates = [WDT.P57, WDT.P161, WDT.P58]\n",
+        "\n",
+        "    entity2_list = get_entity_uri_list(entity2.label, entity2.cls)\n",
+        "\n",
+        "    for entity2_from_list in entity2_list:\n",
+        "      for predicate in predicates:\n",
+        "        if((entity2_from_list, predicate, entity1.uri) in graph):\n",
+        "          return True\n",
+        "    \n",
+        "    for predicate in predicates:\n",
+        "       if((entity2.uri, predicate, entity1.uri) in graph):\n",
+        "         return True\n",
+        "\n",
+        "    return False"
+      ],
+      "metadata": {
+        "id": "q6p9EMx1Z8jK"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "markdown",
+      "source": [
+        "# Main"
+      ],
+      "metadata": {
+        "id": "Q7TcZHmnASqt"
+      }
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "TEST_QUESTIONS = [\n",
+        "\"Who is the director of the Batman movie?\",  \n",
+        "\"Did Christopher Nolan ever work on a Batman movie?\",  \n",
+        "\"What is the name of the lead actor in the movie Catch Me If You Can?\",  \n",
+        "\"I like the Jurassic Park movie; can you recommend any similar movies?\",  \n",
+        "\"I am a big fan of Steven Spielberg, could you recommend some of his action movies?\",  \n",
+        "\"Show me the pictures of the lead actors of the movie Jurassic Park.\", \n",
+        "\"Can you show me the poster of the movie Batman?\",  \n",
+        "\"Show me an action movie poster.\"\n",
+        "]"
+      ],
+      "metadata": {
+        "id": "KUxHPuTr8VKw"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "chatbot = ChatBot()"
+      ],
+      "metadata": {
+        "id": "Zud_nyeEZ8l4"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "import warnings\n",
+        "warnings.filterwarnings('ignore')\n",
+        "\n",
+        "for qst in TEST_QUESTIONS:\n",
+        "  print(qst,\"\\t\\t\", chatbot.get_answer(qst))"
+      ],
+      "metadata": {
+        "id": "IlEVF-vD8nSr"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "markdown",
+      "source": [
+        "# Speak Easy Interface"
+      ],
+      "metadata": {
+        "id": "t45gcStPT34Y"
+      }
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "# install the package\n",
+        "!pip install requests\n",
+        "# import packages\n",
+        "import requests, json, time\n",
+        "from IPython.display import Javascript"
+      ],
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "id": "WYkNi8Pw26HX",
+        "outputId": "813f2964-20ef-4ef2-97be-00bef83b00bb"
+      },
+      "execution_count": null,
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "Requirement already satisfied: requests in /usr/local/lib/python3.7/dist-packages (2.23.0)\n",
+            "Requirement already satisfied: chardet<4,>=3.0.2 in /usr/local/lib/python3.7/dist-packages (from requests) (3.0.4)\n",
+            "Requirement already satisfied: urllib3!=1.25.0,!=1.25.1,<1.26,>=1.21.1 in /usr/local/lib/python3.7/dist-packages (from requests) (1.24.3)\n",
+            "Requirement already satisfied: certifi>=2017.4.17 in /usr/local/lib/python3.7/dist-packages (from requests) (2021.10.8)\n",
+            "Requirement already satisfied: idna<3,>=2.5 in /usr/local/lib/python3.7/dist-packages (from requests) (2.10)\n"
+          ]
+        }
+      ]
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "# url of the speakeasy server\n",
+        "url = \"https://speakeasy.ifi.uzh.ch\"\n",
+        "\n",
+        "# get the api specification\n",
+        "r = requests.get(url + \"/client-specs\")\n",
+        "spec = json.loads(r.text)"
+      ],
+      "metadata": {
+        "id": "7DjQ0fuh1cAJ"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "# user login\n",
+        "def login(username: str, password: str):\n",
+        "    return requests.post(url=url + \"/api/login\", json={\"username\": username, \"password\": password})\n",
+        "\n",
+        "# check details of the current user\n",
+        "def current(session_token: str):\n",
+        "    return requests.get(url=url + \"/api/user/current\", params={\"session\": session_token})\n",
+        "\n",
+        "# user logout\n",
+        "def logout(session_token: str):\n",
+        "    return requests.get(url=url + \"/api/logout\", params={\"session\": session_token})"
+      ],
+      "metadata": {
+        "id": "vZkMNm0e3IMq"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "username = \"\"\n",
+        "password = \"\"\n"
+      ],
+      "metadata": {
+        "id": "NJbFWEf45VYU"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "# check available chat rooms\n",
+        "def check_rooms(session_token: str):\n",
+        "    return requests.get(url=url + \"/api/rooms\", params={\"session\": session_token})\n",
+        "\n",
+        "# check the state of a chat room\n",
+        "def check_room_state(room_id: str, since: int, session_token: str):\n",
+        "    return requests.get(url=url + \"/api/room/{}/{}\".format(room_id, since), params={\"roomId\": room_id, \"since\": since, \"session\": session_token})\n",
+        "\n",
+        "# post a message to a chat room\n",
+        "def post_message(room_id: str, session_token: str, message: str):\n",
+        "    return requests.post(url=url + \"/api/room/{}\".format(room_id), params={\"roomId\": room_id, \"session\": session_token}, data=message)"
+      ],
+      "metadata": {
+        "id": "xzrL2ZqL5a6R"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "INTRODUCTORY_MESSAGE = \"\"\"\n",
+        "Hi, I am bot_990. \n",
+        "I will answer your questions regarding movies, actors, directors, etc.\n",
+        "I am not perfect but I will try my best, please be patient :)\n",
+        "\"\"\""
+      ],
+      "metadata": {
+        "id": "RO0KeokToI-8"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "agent_details = login(username=username, password=password).json()\n",
+        "print(\"--- agent details:\")\n",
+        "print(json.dumps(agent_details, indent=4))\n",
+        "\n",
+        "chatBotArray = {}\n",
+        "chatroom_messages = {}\n",
+        "while True:\n",
+        "    current_rooms = check_rooms(session_token=agent_details[\"sessionToken\"]).json()[\"rooms\"]\n",
+        "    print(\"--- {} chatrooms available\".format(len(current_rooms)))\n",
+        "\n",
+        "    for idx, room in enumerate(current_rooms):\n",
+        "        room_id = room[\"uid\"]\n",
+        "\n",
+        "        if(room_id not in chatBotArray):\n",
+        "          chatbot = ChatBot()\n",
+        "          chatBotArray[room_id] = chatbot\n",
+        "          post_message(room_id=room_id, session_token=agent_details[\"sessionToken\"], message=INTRODUCTORY_MESSAGE)\n",
+        "        \n",
+        "        chatbot = chatBotArray[room_id]\n",
+        "\n",
+        "        print(\"chat room - {}: {}\".format(idx, room_id))\n",
+        "\n",
+        "        new_room_state = check_room_state(room_id=room_id, since=0, session_token=agent_details[\"sessionToken\"]).json()\n",
+        "        new_messages = new_room_state[\"messages\"]\n",
+        "        print(\"found {} messages\".format(len(new_messages)))\n",
+        "\n",
+        "        if room_id not in chatroom_messages.keys():\n",
+        "            chatroom_messages[room_id] = []\n",
+        "\n",
+        "        if len(chatroom_messages[room_id]) != len(new_messages):\n",
+        "            for message in new_messages:\n",
+        "                if message[\"ordinal\"] >= len(chatroom_messages[room_id]) and message[\"session\"] != agent_details[\"sessionId\"]:\n",
+        "                    if(\"bye\" in message[\"message\"].lower()):\n",
+        "                      response = \"bye\"\n",
+        "                    else:\n",
+        "                      try:\n",
+        "                        response = chatbot.get_answer(message[\"message\"])\n",
+        "                      except:\n",
+        "                        print(\"Exception\")\n",
+        "                        response = \"Some error occured, can you rephrase and ask your question again, my creator did left some problems within me :(\"\n",
+        "                    try:\n",
+        "                      post_message(room_id=room_id, session_token=agent_details[\"sessionToken\"], message=response.encode('utf-8'))\n",
+        "                    except:\n",
+        "                      try:\n",
+        "                        post_message(room_id=room_id, session_token=agent_details[\"sessionToken\"], message=\"Sorry some networking issue occured please ask your question again\")\n",
+        "                      except:\n",
+        "                        pass\n",
+        "\n",
+        "\n",
+        "        chatroom_messages[room_id] = new_messages\n",
+        "\n",
+        "    time.sleep(1)\n",
+        "    print(\"\")"
+      ],
+      "metadata": {
+        "id": "QktqHKeU5cN5"
+      },
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "print(\"--- log out\")\n",
+        "r = logout(session_token=agent_details[\"sessionToken\"])\n",
+        "print(r.json())"
+      ],
+      "metadata": {
+        "id": "U5wXtsEl5dr1"
+      },
+      "execution_count": null,
+      "outputs": []
+    }
+  ]
+}
